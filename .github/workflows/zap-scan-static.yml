@@ -1,0 +1,101 @@
+name: ZAP Baseline Scan - Static Site
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  zap_scan_static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Start simple static server (python) in background
+        run: |
+          # serve current repo at port 8080
+          nohup python3 -m http.server 8080 > server.log 2>&1 &
+          # wait until server responds
+          for i in $(seq 1 30); do
+            if curl -sSf http://localhost:8080/ >/dev/null 2>&1; then
+              echo "Server up"
+              break
+            fi
+            echo "Waiting for server... ($i)"
+            sleep 1
+          done
+
+      - name: Show server root (for debug)
+        run: |
+          echo "Files in repo root:"
+          ls -la
+
+      - name: OWASP ZAP baseline scan
+        id: zap
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          fail_action: false
+          target: 'http://localhost:8080'
+          cmd_options: '-r zap_report.html -J zap_report.json -d'
+          artifact_name: 'zap_report'
+
+      - name: Download ZAP artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zap_report
+          path: ./zap_reports || true
+
+      - name: Inspect ZAP JSON (counts & top alerts)
+        run: |
+          # localizando JSON do ZAP
+          if [ -f "./zap_reports/zap_report.json" ]; then
+            ZAP_JSON="./zap_reports/zap_report.json"
+          elif [ -f "./zap_reports/report.json" ]; then
+            ZAP_JSON="./zap_reports/report.json"
+          elif [ -f "./zap_report.json" ]; then
+            ZAP_JSON="./zap_report.json"
+          else
+            echo "JSON do ZAP não encontrado. Listando ./zap_reports:"
+            ls -la ./zap_reports || true
+            echo "Falhando análise."
+            exit 1
+          fi
+
+          echo "Usando JSON: $ZAP_JSON"
+
+          # a) quantidade total de alertas
+          TOTAL=$(jq '[.site[].alerts[]] | length' "$ZAP_JSON")
+          echo "Total de alertas: $TOTAL"
+
+          # b) quantidade por severidade
+          echo "Alertas por severidade:"
+          jq -r '.site[].alerts[] | .risk' "$ZAP_JSON" | \
+            awk '{count[$0]++} END {for (k in count) printf "%s: %d\n", k, count[k]}' | sort -k2 -rn || true
+
+          # c) tipos mais comuns
+          echo "Top vulnerabilidades (tipos):"
+          jq -r '.site[].alerts[] | .alert' "$ZAP_JSON" | sort | uniq -c | sort -rn | head -n 20 || true
+
+          # Contagem HIGH/CRITICAL e falha condicional
+          HIGH=$(jq '[.site[].alerts[] | select(.risk=="High" or .risk=="HIGH" or .risk=="high")] | length' "$ZAP_JSON")
+          CRIT=$(jq '[.site[].alerts[] | select(.risk=="Critical" or .risk=="CRITICAL" or .risk=="critical")] | length' "$ZAP_JSON")
+          echo "High: $HIGH, Critical: $CRIT"
+
+          if [ "$HIGH" -gt 0 ] || [ "$CRIT" -gt 0 ]; then
+            echo "::error file=zap_report.json,title=ZAP Vulnerabilities::Found $((HIGH+CRIT)) HIGH/CRITICAL alerts (HIGH=$HIGH CRITICAL=$CRIT). Failing pipeline."
+            exit 1
+          fi
+
+          echo "Nenhum alerta HIGH/CRITICAL encontrado."
+
+      - name: Upload full ZAP reports as artifact (HTML + JSON + server log)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap_full_report
+          path: |
+            ./zap_reports/**
+            ./zap_report.html
+            ./zap_report.json
+            server.log

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>ClickSeguro Demo - Static</title>
+</head>
+<body>
+  <h1>ClickSeguro Demo (Static)</h1>
+
+  <form action="/" method="get">
+    <label>Busca: <input name="q" /></label>
+    <button type="submit">Pesquisar</button>
+  </form>
+
+  <h2>Resultados</h2>
+  <div id="results">Nenhuma busca realizada.</div>
+
+  <script>
+    // VULNERABILIDADE PROPOSITAL: reflected XSS - não faz escape do valor
+    // Lê ?q= do location.search e injeta no innerHTML sem sanitização
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const q = params.get('q');
+      if (q) {
+        // A linha abaixo é propositalmente vulnerável (innerHTML)
+        document.getElementById('results').innerHTML = 'Resultados para: ' + q;
+      }
+    })();
+  </script>
+</body>
+</html>
