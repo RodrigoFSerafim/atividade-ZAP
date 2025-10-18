@@ -1,0 +1,43 @@
+name: OWASP ZAP Scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  zap_scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Instalar OWASP ZAP
+        run: sudo apt-get update && sudo apt-get install -y zaproxy
+
+      - name: Iniciar servidor local
+        run: |
+          python3 -m http.server 8080 &
+          sleep 5
+
+      - name: Executar ZAP Scan
+        run: |
+          zap-cli start --start-options '-config api.disablekey=true'
+          zap-cli open-url http://localhost:8080
+          zap-cli active-scan http://localhost:8080
+          zap-cli report -o zap_report.html -f html
+
+      - name: Falhar se vulnerabilidade alta ou crítica for encontrada
+        run: |
+          if zap-cli alerts -l High || zap-cli alerts -l Medium; then
+            echo "🚨 Vulnerabilidades graves detectadas! Pipeline será interrompido."
+            exit 1
+          fi
+
+      - name: Publicar relatório como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap_report.html
